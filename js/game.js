@@ -467,7 +467,9 @@ class Game {
   _updateSpeed(dt) {
     if (this._inputManager.isAccelerating()) {
       this._brakeHeldTime = 0;
-      this._speed += PHYSICS.ACCELERATION * dt;
+      // Exponenciální model: dv/dt = (ACCEL_VMAX - v) / ACCEL_TAU
+      // Kalibrováno: 0→100 km/h za 3.5s, 0→200 km/h za 10s
+      this._speed += ((PHYSICS.ACCEL_VMAX - this._speed) / PHYSICS.ACCEL_TAU) * dt;
 
     } else if (this._inputManager.isBraking()) {
       this._brakeHeldTime += dt;

@@ -56,11 +56,10 @@ class AudioEngine {
     /** @private — gain nody */
     this._gains   = { low: null, mid: null, high: null, turbo: null, master: null };
 
-    /** @private */
+    /** @private — index aktuálního stupně (0–4) */
     this._gear         = 0;
-    this._rpm          = AUDIO.RPM_SHIFT_DOWN;
-    this._turboFired1  = false;
-    this._turboFired2  = false;
+    /** @private — aktuální lerpovaná pozice v stupni (0–1) */
+    this._gearN        = 0;
     this._blowoffFired = false;
     this._running      = false;
 
@@ -166,14 +165,12 @@ class AudioEngine {
     master.gain.linearRampToValueAtTime(AUDIO.MASTER_VOLUME, t + 0.3);
 
     // Reset herního stavu
-    this._gear              = 0;
-    this._rpm               = AUDIO.RPM_SHIFT_DOWN;
-    this._turboFired1       = false;
-    this._turboFired2       = false;
-    this._blowoffFired      = false;
-    this._throttleHeldTime  = 0;
+    this._gear                 = 0;
+    this._gearN                = 0;
+    this._blowoffFired         = false;
+    this._throttleHeldTime     = 0;
     this._prevThrottleHeldTime = 0;
-    this._running           = true;
+    this._running              = true;
 
     console.log('[AudioEngine] Engine spuštěn.');
   }
@@ -226,10 +223,7 @@ class AudioEngine {
   update(speedPxPerS, throttle, dt) {
     if (!this._running) return;
 
-    // Sledování doby nepřetržitého držení plynu.
-    // _prevThrottleHeldTime uchovává dobu z předchozího framu —
-    // v momentě release (throttle false) je throttleHeldTime již 0,
-    // ale _prevThrottleHeldTime stále drží hodnotu před nulováním.
+    // Sledování doby držení plynu (pro blowoff)
     const prevHeld = this._throttleHeldTime;
     if (throttle) {
       this._throttleHeldTime += dt;
@@ -238,15 +232,22 @@ class AudioEngine {
     }
     this._prevThrottleHeldTime = prevHeld;
 
-    const targetRpm  = this._calcTargetRpm(speedPxPerS, throttle);
-    const lerpFactor = 1 - Math.exp(-AUDIO.RPM_LERP * dt);
-    this._rpm        = this._rpm + (targetRpm - this._rpm) * lerpFactor;
+    // Vypočti gear, cílové n a playbackRate
+    const { gear, targetN, rate } = this._calcGearAndRate(speedPxPerS, throttle);
+    this._gear = gear;
 
-    const n = Math.max(0, Math.min(1, this._rpm / AUDIO.RPM_MAX));
+    // Lerp n — rychlost závisí na throttle (engine braking = rychlejší pokles)
+    const lerpSpeed  = throttle ? AUDIO.RPM_LERP_ACCEL : AUDIO.RPM_LERP_DECEL;
+    const lerpFactor = 1 - Math.exp(-lerpSpeed * dt);
+    this._gearN      = this._gearN + (targetN - this._gearN) * lerpFactor;
 
-    this._updateLayers(n);
-    this._updateTurbo(n);
-    this._updateBlowoff(n, throttle);
+    // n_global = plynulá pozice přes celý rychlostní rozsah (0–1)
+    // Používá se pro crossfade vrstev — nezávislé na přeřazení
+    const nGlobal = Math.max(0, Math.min(1, speedPxPerS / PHYSICS.SPEED_MAX));
+
+    this._updateLayers(nGlobal, rate, throttle);
+    this._updateTurbo();
+    this._updateBlowoff(throttle);
   }
 
   // ─── Privátní — graf ─────────────────────────────────────────────────────────
@@ -274,88 +275,113 @@ class AudioEngine {
     }
   }
 
-  // ─── Privátní — simulace řazení ──────────────────────────────────────────────
+  // ─── Privátní — řazení a pitch ───────────────────────────────────────────────
 
   /**
-   * Vypočítá cílové RPM dle aktuální rychlosti a simulace řazení.
+   * Určí aktuální stupeň, cílové n (pozici v stupni) a playbackRate.
    *
-   * Hranice stupňů (px/s, odpovídají km/h přes PX_PER_S_TO_KMH):
-   *   1. stupeň:  0 – 225  (0 – 60 km/h)
-   *   2. stupeň: 225 – 450  (60 – 120 km/h)
-   *   3. stupeň: 450 – 675  (120 – 180 km/h)
-   *   4. stupeň: 675 – 975  (180 – 260 km/h)
-   *   5. stupeň: 975 – 1200 (260 – 320 km/h)
-   *   6. stupeň: 1200+      (320+ km/h)
+   * Stupeň se přepne při překročení hranice speedHigh/speedLow z GEAR_DEFS.
+   * Hystereze: přeřazení dolů nastane při poklesu 5 % pod speedLow stupně —
+   * zabraňuje rychlému přepínání na hranici stupňů.
+   *
+   * playbackRate = rateStart + n * (rateEnd - rateStart)
+   * Při engine braking se rate sníží o DECEL_PITCH_OFFSET.
    *
    * @private
+   * @param {number}  speed
+   * @param {boolean} throttle
+   * @returns {{ gear: number, targetN: number, rate: number }}
    */
-  _calcTargetRpm(speed, throttle) {
-    const thresholds = AUDIO.GEAR_THRESHOLDS;   // [0, 225, 450, 675, 975, 1200]
-    const maxGear    = AUDIO.GEAR_COUNT - 1;     // 5 (0-based)
+  _calcGearAndRate(speed, throttle) {
+    const defs    = AUDIO.GEAR_DEFS;
+    const maxGear = AUDIO.GEAR_COUNT - 1;
 
     // Přeřazení nahoru
-    while (this._gear < maxGear && speed >= thresholds[this._gear + 1]) {
+    while (this._gear < maxGear && speed >= defs[this._gear].speedHigh) {
       this._gear++;
-      this._rpm = AUDIO.RPM_SHIFT_DOWN;
     }
-    // Přeřazení dolů
-    while (this._gear > 0 && speed < thresholds[this._gear]) {
-      this._gear--;
+    // Přeřazení dolů (hystereze 5 % šířky stupně)
+    while (this._gear > 0) {
+      const prevDef  = defs[this._gear - 1];
+      const hysteresis = (defs[this._gear].speedHigh - defs[this._gear].speedLow) * 0.05;
+      if (speed < defs[this._gear].speedLow - hysteresis) {
+        this._gear--;
+      } else {
+        break;
+      }
     }
 
-    // Pozice v aktuálním stupni (0–1)
-    const gearLow  = thresholds[this._gear];
-    const gearHigh = this._gear < maxGear ? thresholds[this._gear + 1] : thresholds[maxGear] * 1.1;
-    const posInGear = Math.max(0, Math.min(1, (speed - gearLow) / (gearHigh - gearLow)));
+    const def       = defs[this._gear];
+    const span      = def.speedHigh - def.speedLow;
+    const targetN   = span > 0
+      ? Math.max(0, Math.min(1, (speed - def.speedLow) / span))
+      : 0;
 
-    let targetRpm = AUDIO.RPM_SHIFT_DOWN +
-      posInGear * (AUDIO.RPM_SHIFT_UP - AUDIO.RPM_SHIFT_DOWN);
+    // playbackRate pro aktuální pozici v stupni
+    let rate = def.rateStart + targetN * (def.rateEnd - def.rateStart);
 
+    // Engine braking — lehce stáhne tón při puštění plynu
     if (!throttle) {
-      targetRpm = Math.max(AUDIO.RPM_SHIFT_DOWN * 0.7, targetRpm * 0.6);
+      rate += AUDIO.DECEL_PITCH_OFFSET;
     }
 
-    return targetRpm;
+    return { gear: this._gear, targetN, rate };
   }
 
   // ─── Privátní — audio uzly ───────────────────────────────────────────────────
 
-  /** @private */
-  _updateLayers(n) {
-    const pitch    = AUDIO.PITCH_MIN + n * (AUDIO.PITCH_MAX - AUDIO.PITCH_MIN);
-    const gainLow  = 1 - n;
-    const gainMid  = Math.max(0, 1 - Math.abs(n - 0.5) * 2);
-    const gainHigh = n;
+  /**
+   * Nastaví gainy crossfade vrstev a playbackRate všech smyček.
+   *
+   * Crossfade je řízen n_global (0–1 přes celý rychlostní rozsah),
+   * takže vrstva „low" dominuje při nízkých rychlostech a „high" při vysokých
+   * — nezávisle na přeřazení.
+   *
+   * Crossfade funkce:
+   *   gainLow  = clamp(1 - nGlobal * 3,        0, 1)   → aktivní do ~33 % max
+   *   gainMid  = clamp(1 - |nGlobal-0.5| * 3,  0, 1)   → aktivní kolem 50 %
+   *   gainHigh = clamp((nGlobal - 0.67) * 3,   0, 1)   → aktivní od ~67 % max
+   *
+   * Každá vrstva má vlastní playbackRate odpovídající pozici v aktuálním stupni.
+   *
+   * @private
+   * @param {number}  nGlobal  - Pozice v celém rychlostním rozsahu (0–1).
+   * @param {number}  rate     - Cílový playbackRate.
+   * @param {boolean} throttle
+   */
+  _updateLayers(nGlobal, rate, throttle) {
+    const gainLow  = Math.max(0, Math.min(1, 1 - nGlobal * 3));
+    const gainMid  = Math.max(0, Math.min(1, 1 - Math.abs(nGlobal - 0.5) * 3));
+    const gainHigh = Math.max(0, Math.min(1, (nGlobal - 0.67) * 3));
 
     this._setGain(this._gains.low,  gainLow);
     this._setGain(this._gains.mid,  gainMid);
     this._setGain(this._gains.high, gainHigh);
 
+    // Plynulý lerp playbackRate — zamezí skokovému praskání při přeřazení
     for (const layer of ['low', 'mid', 'high']) {
-      if (this._sources[layer]) {
-        this._sources[layer].playbackRate.value = pitch;
-      }
+      const src = this._sources[layer];
+      if (!src) continue;
+      const current = src.playbackRate.value;
+      // Rychlé přiblížení (exponenciální smoothing ~3 framy)
+      src.playbackRate.value = current + (rate - current) * 0.12;
     }
   }
 
-  /** @private */
-  _updateTurbo(_n) {
-    // Turbo one-shot vypnut
-  }
+  /** @private — turbo one-shot vypnut */
+  _updateTurbo() {}
 
-  /** @private */
-  _updateBlowoff(n, throttle) {
-    // Přehrát blowoff při release plynu, pokud byl plyn držen alespoň 1s.
-    // Používáme _prevThrottleHeldTime — v momentě release je throttleHeldTime
-    // již vynulováno, ale prevThrottleHeldTime drží hodnotu z předchozího framu.
+  /**
+   * Přehraje blowoff při release plynu po alespoň 1s držení.
+   * @private
+   */
+  _updateBlowoff(throttle) {
     const wasHeldLong = this._prevThrottleHeldTime >= AUDIO.TURBO_THROTTLE_MIN;
 
     if (!throttle && wasHeldLong && !this._blowoffFired) {
       this._blowoffFired = true;
       this._playOneShot(this._buffers.blowoff, AUDIO.BLOWOFF_VOLUME);
     }
-
-    // Reset flagu při novém přidání plynu
     if (throttle) this._blowoffFired = false;
   }
 

@@ -47,8 +47,15 @@ const PHYSICS = Object.freeze({
   SPEED_MIN:           75,
   /** Maximální rychlost — odpovídá 320 km/h zobrazených hráči (px/s) */
   SPEED_MAX:         1200,
-  /** Akcelerace při držení ↑ (px/s²) */
-  ACCELERATION:       340,
+  /**
+   * Exponenciální model akcelerace při držení ↑:
+   *   dv/dt = (ACCEL_VMAX - v) / ACCEL_TAU
+   * Kalibrováno: 0→100 km/h za 3.5s, 0→200 km/h za 10s.
+   * ACCEL_VMAX = efektivní asymptotická rychlost modelu (px/s)
+   * ACCEL_TAU  = časová konstanta (s)
+   */
+  ACCEL_VMAX:        1037,
+  ACCEL_TAU:          7.8,
   /** Základní zpomalení při držení ↓ — první fáze brzdění (px/s²) */
   DECELERATION:       500,
   /**
@@ -271,40 +278,64 @@ const LANE_ANIM = Object.freeze({
 // ─── Audio — zvukový engine motoru ───────────────────────────────────────────
 
 const AUDIO = Object.freeze({
-  /** Maximální RPM motoru */
-  RPM_MAX:           8000,
-  /** RPM při přeřazení nahoru */
-  RPM_SHIFT_UP:      7200,
-  /** RPM po přeřazení nahoru (nový stupeň začíná zde) */
-  RPM_SHIFT_DOWN:    3200,
-  /** Počet rychlostních stupňů */
-  GEAR_COUNT:        6,
   /**
-   * Hranice rychlostních stupňů v px/s (odvozeno z km/h přes PX_PER_S_TO_KMH).
-   * Stupeň 1: 0–225, 2: 225–450, 3: 450–675, 4: 675–975, 5: 975–1200, 6: 1200+
-   * km/h:      0–60,  60–120,    120–180,    180–260,    260–320
+   * Definice 5 rychlostních stupňů.
+   * speedLow/speedHigh — rozsah v px/s (odvozeno z km/h přes PX_PER_S_TO_KMH).
+   * rateStart/rateEnd  — playbackRate na začátku/konci stupně.
+   *
+   * Vzorky jsou nahrány při: low=1000 RPM, mid=4000 RPM, high=8000 RPM.
+   * playbackRate = cílové_RPM / referenční_RPM_vzorku.
+   * Každý stupeň se pohybuje v úzkém rozsahu ±20 % kolem referenčního bodu
+   * aby nedocházelo k výraznému zkreslení zvuku.
+   *
+   *  Stupeň | km/h    | px/s      | Dominantní vrstva
+   *  -------+---------+-----------+------------------
+   *    1    |   0–75  |   0– 281  | low  (1000 RPM)
+   *    2    |  75–120 | 281– 450  | low → mid
+   *    3    | 120–170 | 450– 638  | mid  (4000 RPM)
+   *    4    | 170–220 | 638– 825  | mid → high
+   *    5    | 220–320 | 825–1200  | high (8000 RPM)
    */
-  GEAR_THRESHOLDS:   Object.freeze([0, 225, 450, 675, 975, 1200]),
-  /** Minimální playbackRate (při RPM = 0) */
-  PITCH_MIN:         0.6,
-  /** Maximální playbackRate (při RPM = RPM_MAX) */
-  PITCH_MAX:         2.0,
-  /** Inerce RPM — lerp faktor za sekundu (vyšší = rychlejší odezva) */
-  RPM_LERP:          4.0,
-  /** Hodnota n (rpm/RPM_MAX) pro 1. turbo one-shot (low→mid) */
-  TURBO_THRESHOLD_1: 0.35,
-  /** Hodnota n (rpm/RPM_MAX) pro 2. turbo one-shot (mid→high) */
-  TURBO_THRESHOLD_2: 0.70,
-  /** Minimální n pro spuštění blowoff (při puštění plynu) */
-  BLOWOFF_MIN_N:     0.55,
-  /** Maximální hlasitost turbo loopu */
-  TURBO_VOLUME:      0.45,
+  GEAR_DEFS: Object.freeze([
+    { speedLow:   0, speedHigh:  281, rateStart: 0.80, rateEnd: 1.10 },
+    { speedLow: 281, speedHigh:  450, rateStart: 0.85, rateEnd: 1.05 },
+    { speedLow: 450, speedHigh:  638, rateStart: 0.82, rateEnd: 1.05 },
+    { speedLow: 638, speedHigh:  825, rateStart: 0.83, rateEnd: 1.05 },
+    { speedLow: 825, speedHigh: 1200, rateStart: 0.85, rateEnd: 1.05 },
+  ]),
+
+  /** Počet stupňů (odvozeno z GEAR_DEFS.length — pro čitelnost) */
+  GEAR_COUNT: 5,
+
+  /**
+   * Lerp faktor RPM při akceleraci (vyšší = rychlejší nárůst otáček).
+   * Hodnota za sekundu: nová = stará + (cíl - stará) * (1 - exp(-LERP * dt))
+   */
+  RPM_LERP_ACCEL: 4.0,
+
+  /**
+   * Lerp faktor RPM při deceleraci — rychlejší pokles pro engine braking charakter.
+   */
+  RPM_LERP_DECEL: 7.0,
+
+  /**
+   * Korekce playbackRate při engine braking (přičítá se k vypočtenému rate).
+   * Záporná hodnota = lehce nižší tón při puštění plynu.
+   */
+  DECEL_PITCH_OFFSET: -0.06,
+
+  /** Hlasitost master gain (engine vrstvy low/mid/high) */
+  MASTER_VOLUME:      0.8,
+
   /** Hlasitost blowoff one-shotu */
-  BLOWOFF_VOLUME:    0.65,
-  /** Hlasitost master gain (engine vrstvy) */
-  MASTER_VOLUME:     0.8,
-  /** Délka fade-out při zastavení enginu (s) */
-  FADE_OUT_TIME:     0.4,
-  /** Minimální doba držení plynu (s) pro spuštění turbo one-shotu */
+  BLOWOFF_VOLUME:     0.65,
+
+  /** Hlasitost turbo one-shotu (momentálně nevyužito) */
+  TURBO_VOLUME:       0.45,
+
+  /** Minimální doba držení plynu (s) pro spuštění blowoff */
   TURBO_THROTTLE_MIN: 1.0,
+
+  /** Délka fade-out při zastavení enginu (s) */
+  FADE_OUT_TIME:      0.4,
 });
