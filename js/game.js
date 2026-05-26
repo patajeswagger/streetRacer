@@ -186,6 +186,10 @@ class Game {
 
     this._registerMobileControls();
 
+    // Zvukový engine — načítání na pozadí (neblokuje start obrazovku)
+    this._audioEngine = new AudioEngine();
+    this._audioEngine.load();
+
     // Zobrazení úvodní obrazovky
     this._hud.showStart();
     this._hud.onStartClick(() => this._handleStartClick());
@@ -252,6 +256,7 @@ class Game {
   /** @private */
   _handleStartClick() {
     if (this._state === GameState.IDLE || this._state === GameState.GAME_OVER) {
+      this._audioEngine.start();
       this._startGame();
     }
   }
@@ -304,6 +309,7 @@ class Game {
     this._inputManager.setEnabled(false);
     this._playerCar.lockInput();
     cancelAnimationFrame(this._rafHandle);
+    this._audioEngine.stop();
 
     const bustedSpeedKmh = busted
       ? Math.round(this._speed * PHYSICS.PX_PER_S_TO_KMH)
@@ -418,6 +424,13 @@ class Game {
       this._scoreSystem.totalScore,
       this._scoreSystem.distanceMeters,
       this._speed
+    );
+
+    // 14. Zvukový engine
+    this._audioEngine.update(
+      this._speed,
+      this._inputManager.isAccelerating(),
+      dt
     );
   }
 

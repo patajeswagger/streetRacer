@@ -267,3 +267,36 @@ const LANE_ANIM = Object.freeze({
   /** Celková délka jednoho dash+gap cyklu */
   CYCLE: ROAD.LANE_LINE_DASH + ROAD.LANE_LINE_GAP,
 });
+
+// ─── Audio — zvukový engine motoru ───────────────────────────────────────────
+
+const AUDIO = Object.freeze({
+  /** Maximální RPM motoru */
+  RPM_MAX:           8000,
+  /** RPM při přeřazení nahoru */
+  RPM_SHIFT_UP:      7200,
+  /** RPM po přeřazení nahoru (nový stupeň začíná zde) */
+  RPM_SHIFT_DOWN:    3200,
+  /** Počet rychlostních stupňů */
+  GEAR_COUNT:        6,
+  /** Minimální playbackRate (při RPM = 0) */
+  PITCH_MIN:         0.6,
+  /** Maximální playbackRate (při RPM = RPM_MAX) */
+  PITCH_MAX:         2.0,
+  /** Inerce RPM — lerp faktor za sekundu (vyšší = rychlejší odezva) */
+  RPM_LERP:          4.0,
+  /** Hodnota n (rpm/RPM_MAX) pro 1. turbo one-shot (low→mid) */
+  TURBO_THRESHOLD_1: 0.35,
+  /** Hodnota n (rpm/RPM_MAX) pro 2. turbo one-shot (mid→high) */
+  TURBO_THRESHOLD_2: 0.70,
+  /** Minimální n pro spuštění blowoff (při puštění plynu) */
+  BLOWOFF_MIN_N:     0.55,
+  /** Maximální hlasitost turbo loopu */
+  TURBO_VOLUME:      0.45,
+  /** Hlasitost blowoff one-shotu */
+  BLOWOFF_VOLUME:    0.65,
+  /** Hlasitost master gain (engine vrstvy) */
+  MASTER_VOLUME:     0.8,
+  /** Délka fade-out při zastavení enginu (s) */
+  FADE_OUT_TIME:     0.4,
+});
