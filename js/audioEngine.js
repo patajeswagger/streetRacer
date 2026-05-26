@@ -4,28 +4,23 @@
  * @file audioEngine.js
  * Realistický zvukový engine motoru postavený na Web Audio API.
  *
- * Architektura uzlů:
+ * Klíčové designové rozhodnutí:
+ *   AudioContext se vytváří až v start() — při kliknutí uživatelem.
+ *   load() pouze stáhne raw ArrayBuffery (fetch). Dekódování proběhne
+ *   v start() po vytvoření kontextu. Tím se obchází browser autoplay policy.
+ *
+ * Uzlový graf:
  *   lowSrc  → lowGain  ─┐
  *   midSrc  → midGain  ─┤→ masterGain → destination
  *   highSrc → highGain ─┘
- *   turboSrc → turboGain ──────────────→ destination
- *   blowoff  = one-shot node (nový AudioBufferSourceNode při každém výstřelu)
+ *   turboSrc → turboGain ──→ destination
+ *   blowoff  = one-shot (nový node při každém výstřelu)
  *
  * Simulace řazení:
- *   - 6 stupňů, každý pokrývá rovnoměrný díl rozsahu SPEED_MIN–SPEED_MAX.
- *   - V každém stupni RPM lineárně roste od RPM_SHIFT_DOWN po RPM_SHIFT_UP.
- *   - Při překročení RPM_SHIFT_UP → stupeň++, RPM skočí na RPM_SHIFT_DOWN.
- *   - Při poklesu pod spodní hranici stupně → stupeň--.
- *   - Aktuální RPM je vždy lerpováno k cílovému RPM (inerce AUDIO.RPM_LERP).
- *
- * Turbo one-shot:
- *   - Sleduje přechody n přes prahy TURBO_THRESHOLD_1 a TURBO_THRESHOLD_2.
- *   - Každý práh má vlastní flag; resetuje se při poklesu n pod práh.
- *   - One-shot se přehraje max. jednou za průchod prahem.
- *
- * Blowoff:
- *   - Spustí se při puštění plynu (throttle = false) pokud n > BLOWOFF_MIN_N.
- *   - Přehraje se max. jednou; flag se resetuje při dalším throttle = true.
+ *   6 stupňů pokrývá rovnoměrný díl rozsahu SPEED_MIN–SPEED_MAX.
+ *   RPM roste od RPM_SHIFT_DOWN po RPM_SHIFT_UP v rámci stupně.
+ *   Přeřazení nahoru/dolů dle překročení hranic stupně.
+ *   Aktuální RPM je lerpováno k cílovému (inerce AUDIO.RPM_LERP).
  */
 
 class AudioEngine {
@@ -33,7 +28,20 @@ class AudioEngine {
     /** @private @type {AudioContext|null} */
     this._ctx = null;
 
-    /** @private — AudioBuffers načtené z WAV souborů */
+    /**
+     * Raw ArrayBuffery stažené přes fetch.
+     * Dekódují se v start() po vytvoření AudioContext.
+     * @private
+     */
+    this._rawBuffers = {
+      low:     null,
+      mid:     null,
+      high:    null,
+      turbo:   null,
+      blowoff: null,
+    };
+
+    /** @private @type {Object.<string, AudioBuffer>} — dekódované buffery */
     this._buffers = {
       low:     null,
       mid:     null,
@@ -43,126 +51,103 @@ class AudioEngine {
     };
 
     /** @private — aktivní smyčkující source nody */
-    this._sources = {
-      low:   null,
-      mid:   null,
-      high:  null,
-      turbo: null,
-    };
+    this._sources = { low: null, mid: null, high: null, turbo: null };
 
     /** @private — gain nody */
-    this._gains = {
-      low:    null,
-      mid:    null,
-      high:   null,
-      turbo:  null,
-      master: null,
-    };
+    this._gains   = { low: null, mid: null, high: null, turbo: null, master: null };
 
-    /** @private — aktuální simulovaný rychlostní stupeň (0–GEAR_COUNT-1) */
-    this._gear = 0;
-
-    /** @private — aktuální RPM (lerpované) */
-    this._rpm = AUDIO.RPM_SHIFT_DOWN;
-
-    /** @private — flagy pro turbo one-shot (true = práh byl již překročen) */
-    this._turboFired1 = false;
-    this._turboFired2 = false;
-
-    /** @private — blowoff flag (true = blowoff již přehrán, čeká na reset) */
+    /** @private */
+    this._gear         = 0;
+    this._rpm          = AUDIO.RPM_SHIFT_DOWN;
+    this._turboFired1  = false;
+    this._turboFired2  = false;
     this._blowoffFired = false;
+    this._running      = false;
 
-    /** @private — zda engine právě běží */
-    this._running = false;
+    /** @private — jak dlouho hráč nepřetržitě drží plyn (s) */
+    this._throttleHeldTime     = 0;
+    /** @private — hodnota _throttleHeldTime z předchozího framu */
+    this._prevThrottleHeldTime = 0;
 
-    /** @private — zda byly buffery úspěšně načteny */
-    this._loaded = false;
+    /** @private — true pokud raw buffery byly staženy */
+    this._rawLoaded = false;
   }
 
   // ─── Načítání ────────────────────────────────────────────────────────────────
 
   /**
-   * Načte všechny WAV soubory a dekóduje je do AudioBufferů.
-   * Volá se při inicializaci hry (na pozadí, neblokuje).
+   * Dekóduje WAV data z base64 konstant (AUDIO_BUFFERS z audioBuffers.js).
+   * Nevyžaduje fetch ani XHR — funguje na file:// protokolu.
+   * AudioContext se vytváří až zde, před první uživatelskou interakcí
+   * potřebujeme jen ArrayBuffery — ty získáme z atob().
    * @returns {Promise<void>}
    */
   async load() {
-    const files = {
-      low:     'assets/engine-low.wav',
-      mid:     'assets/engine-mid.wav',
-      high:    'assets/engine-high.wav',
-      turbo:   'assets/turbo.wav',
-      blowoff: 'assets/blowoff.wav',
-    };
-
-    // AudioContext vytváříme co nejpozději — až při load(), ne v konstruktoru
-    this._ctx = new (window.AudioContext || window.webkitAudioContext)();
-
     try {
-      const entries = Object.entries(files);
-      const results = await Promise.all(
-        entries.map(async ([key, path]) => {
-          const response = await fetch(path);
-          if (!response.ok) throw new Error(`HTTP ${response.status}: ${path}`);
-          const arrayBuffer = await response.arrayBuffer();
-          const audioBuffer = await this._ctx.decodeAudioData(arrayBuffer);
-          return [key, audioBuffer];
-        })
-      );
-
-      for (const [key, buf] of results) {
-        this._buffers[key] = buf;
+      // Převod base64 data URI → ArrayBuffer bez fetch/XHR
+      for (const key of ['low', 'mid', 'high', 'turbo', 'blowoff']) {
+        const dataUri = AUDIO_BUFFERS[key];
+        const base64  = dataUri.split(',')[1];
+        const binary  = atob(base64);
+        const bytes   = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) {
+          bytes[i] = binary.charCodeAt(i);
+        }
+        this._rawBuffers[key] = bytes.buffer;
       }
 
-      this._loaded = true;
-      this._buildGraph();
+      this._rawLoaded = true;
+      console.log('[AudioEngine] Buffery připraveny, čeká se na start().');
 
     } catch (err) {
       console.warn('[AudioEngine] Načítání zvuků selhalo:', err.message);
     }
   }
 
-  // ─── Graf uzlů ───────────────────────────────────────────────────────────────
-
-  /**
-   * Sestaví audio uzlový graf.
-   * Volá se po úspěšném načtení bufferů.
-   * @private
-   */
-  _buildGraph() {
-    const ctx = this._ctx;
-
-    // Master gain (engine vrstvy)
-    this._gains.master = ctx.createGain();
-    this._gains.master.gain.value = 0;   // začínáme ztlumeně, start() fade-in
-    this._gains.master.connect(ctx.destination);
-
-    // Turbo gain (přímé připojení)
-    this._gains.turbo = ctx.createGain();
-    this._gains.turbo.gain.value = 0;
-    this._gains.turbo.connect(ctx.destination);
-
-    // Engine vrstvy
-    for (const layer of ['low', 'mid', 'high']) {
-      const gain = ctx.createGain();
-      gain.gain.value = 0;
-      gain.connect(this._gains.master);
-      this._gains[layer] = gain;
-    }
-  }
-
   // ─── Spuštění / zastavení ────────────────────────────────────────────────────
 
   /**
-   * Spustí engine zvuky. Volá se při kliknutí na HRÁT.
-   * Pokud buffery ještě nejsou načteny, ticho (bez chyb).
+   * Spustí engine zvuky.
+   * Volá se při kliknutí na HRÁT — zde je garantována uživatelská interakce,
+   * takže AudioContext lze vytvořit a ihned resume().
+   * Dekóduje buffery (pokud ještě nejsou) a spustí smyčky.
    */
-  start() {
-    if (!this._loaded || this._running) return;
+  async start() {
+    if (this._running) return;
 
-    this._ctx.resume();
+    if (!this._rawLoaded) {
+      console.warn('[AudioEngine] start() voláno dříve než load() dokončil — ticho.');
+      return;
+    }
 
-    // Spustí smyčkující source nody pro engine vrstvy + turbo
+    // Vytvoř nebo znovu použij AudioContext
+    if (!this._ctx || this._ctx.state === 'closed') {
+      this._ctx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+
+    // Probudí kontext (povinné po browser autoplay policy)
+    await this._ctx.resume();
+    console.log('[AudioEngine] AudioContext state:', this._ctx.state);
+
+    // Dekóduj ArrayBuffery → AudioBuffery (musí proběhnout po vytvoření ctx)
+    try {
+      for (const key of ['low', 'mid', 'high', 'turbo', 'blowoff']) {
+        if (this._rawBuffers[key] && !this._buffers[key]) {
+          // slice() — decodeAudioData spotřebuje buffer, potřebujeme kopii pro restart
+          this._buffers[key] = await this._ctx.decodeAudioData(
+            this._rawBuffers[key].slice(0)
+          );
+        }
+      }
+    } catch (err) {
+      console.error('[AudioEngine] Dekódování selhalo:', err);
+      return;
+    }
+
+    // Sestav graf
+    this._buildGraph();
+
+    // Spusť smyčky
     for (const layer of ['low', 'mid', 'high']) {
       this._sources[layer] = this._createLoopSource(this._buffers[layer]);
       this._sources[layer].connect(this._gains[layer]);
@@ -175,17 +160,22 @@ class AudioEngine {
 
     // Fade-in master gainu
     const master = this._gains.master;
-    master.gain.cancelScheduledValues(this._ctx.currentTime);
-    master.gain.setValueAtTime(0, this._ctx.currentTime);
-    master.gain.linearRampToValueAtTime(AUDIO.MASTER_VOLUME, this._ctx.currentTime + 0.3);
+    const t      = this._ctx.currentTime;
+    master.gain.cancelScheduledValues(t);
+    master.gain.setValueAtTime(0, t);
+    master.gain.linearRampToValueAtTime(AUDIO.MASTER_VOLUME, t + 0.3);
 
-    // Reset stavu
-    this._gear          = 0;
-    this._rpm           = AUDIO.RPM_SHIFT_DOWN;
-    this._turboFired1   = false;
-    this._turboFired2   = false;
-    this._blowoffFired  = false;
-    this._running       = true;
+    // Reset herního stavu
+    this._gear              = 0;
+    this._rpm               = AUDIO.RPM_SHIFT_DOWN;
+    this._turboFired1       = false;
+    this._turboFired2       = false;
+    this._blowoffFired      = false;
+    this._throttleHeldTime  = 0;
+    this._prevThrottleHeldTime = 0;
+    this._running           = true;
+
+    console.log('[AudioEngine] Engine spuštěn.');
   }
 
   /**
@@ -201,7 +191,6 @@ class AudioEngine {
     const t      = ctx.currentTime;
     const tEnd   = t + AUDIO.FADE_OUT_TIME;
 
-    // Fade-out master + turbo
     master.gain.cancelScheduledValues(t);
     master.gain.setValueAtTime(master.gain.value, t);
     master.gain.linearRampToValueAtTime(0, tEnd);
@@ -210,7 +199,6 @@ class AudioEngine {
     turbo.gain.setValueAtTime(turbo.gain.value, t);
     turbo.gain.linearRampToValueAtTime(0, tEnd);
 
-    // Zastavení source nodů po fade-outu
     setTimeout(() => {
       for (const key of ['low', 'mid', 'high', 'turbo']) {
         if (this._sources[key]) {
@@ -218,7 +206,12 @@ class AudioEngine {
           this._sources[key] = null;
         }
       }
+      // Nuluj gains pro příští start()
+      for (const key of Object.keys(this._gains)) {
+        this._gains[key] = null;
+      }
       ctx.suspend();
+      console.log('[AudioEngine] Engine zastaven.');
     }, AUDIO.FADE_OUT_TIME * 1000 + 50);
   }
 
@@ -226,8 +219,6 @@ class AudioEngine {
 
   /**
    * Aktualizuje zvuk motoru každý frame.
-   * Volá se z herní smyčky hry.
-   *
    * @param {number}  speedPxPerS - Aktuální rychlost silnice (px/s).
    * @param {boolean} throttle    - True = hráč drží plyn (↑).
    * @param {number}  dt          - Delta time (s).
@@ -235,76 +226,91 @@ class AudioEngine {
   update(speedPxPerS, throttle, dt) {
     if (!this._running) return;
 
-    // 1. Simulace řazení → cílové RPM
-    const targetRpm = this._calcTargetRpm(speedPxPerS, throttle);
+    // Sledování doby nepřetržitého držení plynu.
+    // _prevThrottleHeldTime uchovává dobu z předchozího framu —
+    // v momentě release (throttle false) je throttleHeldTime již 0,
+    // ale _prevThrottleHeldTime stále drží hodnotu před nulováním.
+    const prevHeld = this._throttleHeldTime;
+    if (throttle) {
+      this._throttleHeldTime += dt;
+    } else {
+      this._throttleHeldTime = 0;
+    }
+    this._prevThrottleHeldTime = prevHeld;
 
-    // 2. Lerp RPM (inerce motoru)
+    const targetRpm  = this._calcTargetRpm(speedPxPerS, throttle);
     const lerpFactor = 1 - Math.exp(-AUDIO.RPM_LERP * dt);
-    this._rpm = this._rpm + (targetRpm - this._rpm) * lerpFactor;
+    this._rpm        = this._rpm + (targetRpm - this._rpm) * lerpFactor;
 
-    // 3. Normalizovaná hodnota n ∈ [0, 1]
     const n = Math.max(0, Math.min(1, this._rpm / AUDIO.RPM_MAX));
 
-    // 4. Crossfade engine vrstev + pitch
     this._updateLayers(n);
-
-    // 5. Turbo one-shot
     this._updateTurbo(n);
-
-    // 6. Blowoff
     this._updateBlowoff(n, throttle);
+  }
+
+  // ─── Privátní — graf ─────────────────────────────────────────────────────────
+
+  /**
+   * Sestaví audio uzlový graf. Volá se při každém start().
+   * @private
+   */
+  _buildGraph() {
+    const ctx = this._ctx;
+
+    this._gains.master = ctx.createGain();
+    this._gains.master.gain.value = 0;
+    this._gains.master.connect(ctx.destination);
+
+    this._gains.turbo = ctx.createGain();
+    this._gains.turbo.gain.value = 0;
+    this._gains.turbo.connect(ctx.destination);
+
+    for (const layer of ['low', 'mid', 'high']) {
+      const gain = ctx.createGain();
+      gain.gain.value = layer === 'low' ? 1 : 0;   // low jako výchozí vrstva
+      gain.connect(this._gains.master);
+      this._gains[layer] = gain;
+    }
   }
 
   // ─── Privátní — simulace řazení ──────────────────────────────────────────────
 
   /**
-   * Vypočítá cílové RPM na základě aktuální rychlosti a simulace řazení.
+   * Vypočítá cílové RPM dle aktuální rychlosti a simulace řazení.
    *
-   * Každý ze 6 stupňů pokrývá rovnoměrný díl rozsahu SPEED_MIN–SPEED_MAX.
-   * V každém stupni RPM roste lineárně od RPM_SHIFT_DOWN do RPM_SHIFT_UP.
-   * Přeřazení nahoru: rychlost překročila horní hranici stupně.
-   * Přeřazení dolů:  rychlost klesla pod spodní hranici stupně.
+   * Hranice stupňů (px/s, odpovídají km/h přes PX_PER_S_TO_KMH):
+   *   1. stupeň:  0 – 225  (0 – 60 km/h)
+   *   2. stupeň: 225 – 450  (60 – 120 km/h)
+   *   3. stupeň: 450 – 675  (120 – 180 km/h)
+   *   4. stupeň: 675 – 975  (180 – 260 km/h)
+   *   5. stupeň: 975 – 1200 (260 – 320 km/h)
+   *   6. stupeň: 1200+      (320+ km/h)
    *
    * @private
-   * @param {number}  speed
-   * @param {boolean} throttle
-   * @returns {number} Cílové RPM
    */
   _calcTargetRpm(speed, throttle) {
-    const speedMin  = PHYSICS.SPEED_MIN;
-    const speedMax  = PHYSICS.SPEED_MAX;
-    const gearCount = AUDIO.GEAR_COUNT;
-
-    // Šířka jednoho stupně v px/s
-    const gearSpan = (speedMax - speedMin) / gearCount;
-
-    // Hranice aktuálního stupně
-    const gearLow  = speedMin + this._gear * gearSpan;
-    const gearHigh = gearLow + gearSpan;
+    const thresholds = AUDIO.GEAR_THRESHOLDS;   // [0, 225, 450, 675, 975, 1200]
+    const maxGear    = AUDIO.GEAR_COUNT - 1;     // 5 (0-based)
 
     // Přeřazení nahoru
-    if (speed >= gearHigh && this._gear < gearCount - 1) {
+    while (this._gear < maxGear && speed >= thresholds[this._gear + 1]) {
       this._gear++;
       this._rpm = AUDIO.RPM_SHIFT_DOWN;
     }
-
     // Přeřazení dolů
-    if (speed < gearLow && this._gear > 0) {
+    while (this._gear > 0 && speed < thresholds[this._gear]) {
       this._gear--;
     }
 
     // Pozice v aktuálním stupni (0–1)
-    const gearLowCurrent  = speedMin + this._gear * gearSpan;
-    const gearHighCurrent = gearLowCurrent + gearSpan;
-    const posInGear = Math.max(0, Math.min(1,
-      (speed - gearLowCurrent) / (gearHighCurrent - gearLowCurrent)
-    ));
+    const gearLow  = thresholds[this._gear];
+    const gearHigh = this._gear < maxGear ? thresholds[this._gear + 1] : thresholds[maxGear] * 1.1;
+    const posInGear = Math.max(0, Math.min(1, (speed - gearLow) / (gearHigh - gearLow)));
 
-    // Cílové RPM v tomto stupni
     let targetRpm = AUDIO.RPM_SHIFT_DOWN +
       posInGear * (AUDIO.RPM_SHIFT_UP - AUDIO.RPM_SHIFT_DOWN);
 
-    // Při brzdění / puštění plynu RPM klesá rychleji
     if (!throttle) {
       targetRpm = Math.max(AUDIO.RPM_SHIFT_DOWN * 0.7, targetRpm * 0.6);
     }
@@ -314,15 +320,9 @@ class AudioEngine {
 
   // ─── Privátní — audio uzly ───────────────────────────────────────────────────
 
-  /**
-   * Nastaví gain a playbackRate engine vrstev dle n.
-   * Crossfade vzorec shodný s Phaser snippetem.
-   * @private
-   * @param {number} n - Normalizované RPM [0, 1].
-   */
+  /** @private */
   _updateLayers(n) {
-    const pitch = AUDIO.PITCH_MIN + n * (AUDIO.PITCH_MAX - AUDIO.PITCH_MIN);
-
+    const pitch    = AUDIO.PITCH_MIN + n * (AUDIO.PITCH_MAX - AUDIO.PITCH_MIN);
     const gainLow  = 1 - n;
     const gainMid  = Math.max(0, 1 - Math.abs(n - 0.5) * 2);
     const gainHigh = n;
@@ -338,57 +338,30 @@ class AudioEngine {
     }
   }
 
-  /**
-   * Hlídá přechody n přes turbo prahy a přehraje one-shot.
-   * @private
-   * @param {number} n
-   */
-  _updateTurbo(n) {
-    // Práh 1: n přešel přes TURBO_THRESHOLD_1 nahoru
-    if (n >= AUDIO.TURBO_THRESHOLD_1 && !this._turboFired1) {
-      this._turboFired1 = true;
-      this._playOneShot(this._buffers.turbo, AUDIO.TURBO_VOLUME, this._gains.turbo);
-    }
-    // Reset flagu při poklesu pod práh
-    if (n < AUDIO.TURBO_THRESHOLD_1 - 0.05) {
-      this._turboFired1 = false;
-    }
-
-    // Práh 2: n přešel přes TURBO_THRESHOLD_2 nahoru
-    if (n >= AUDIO.TURBO_THRESHOLD_2 && !this._turboFired2) {
-      this._turboFired2 = true;
-      this._playOneShot(this._buffers.turbo, AUDIO.TURBO_VOLUME * 0.8, this._gains.turbo);
-    }
-    if (n < AUDIO.TURBO_THRESHOLD_2 - 0.05) {
-      this._turboFired2 = false;
-    }
+  /** @private */
+  _updateTurbo(_n) {
+    // Turbo one-shot vypnut
   }
 
-  /**
-   * Přehraje blowoff při puštění plynu na vysokých otáčkách.
-   * @private
-   * @param {number}  n
-   * @param {boolean} throttle
-   */
+  /** @private */
   _updateBlowoff(n, throttle) {
-    if (!throttle && n > AUDIO.BLOWOFF_MIN_N && !this._blowoffFired) {
+    // Přehrát blowoff při release plynu, pokud byl plyn držen alespoň 1s.
+    // Používáme _prevThrottleHeldTime — v momentě release je throttleHeldTime
+    // již vynulováno, ale prevThrottleHeldTime drží hodnotu z předchozího framu.
+    const wasHeldLong = this._prevThrottleHeldTime >= AUDIO.TURBO_THROTTLE_MIN;
+
+    if (!throttle && wasHeldLong && !this._blowoffFired) {
       this._blowoffFired = true;
-      this._playOneShot(this._buffers.blowoff, AUDIO.BLOWOFF_VOLUME, null);
+      this._playOneShot(this._buffers.blowoff, AUDIO.BLOWOFF_VOLUME);
     }
-    // Reset flagu při dalším přidání plynu
-    if (throttle) {
-      this._blowoffFired = false;
-    }
+
+    // Reset flagu při novém přidání plynu
+    if (throttle) this._blowoffFired = false;
   }
 
   // ─── Privátní — pomocné ──────────────────────────────────────────────────────
 
-  /**
-   * Vytvoří nový smyčkující AudioBufferSourceNode.
-   * @private
-   * @param {AudioBuffer} buffer
-   * @returns {AudioBufferSourceNode}
-   */
+  /** @private */
   _createLoopSource(buffer) {
     const src  = this._ctx.createBufferSource();
     src.buffer = buffer;
@@ -397,42 +370,32 @@ class AudioEngine {
   }
 
   /**
-   * Přehraje buffer jako one-shot (nový node, bez smyčky).
-   * Pokud gainNode není zadán, připojí přímo na destination.
+   * Přehraje buffer jako one-shot přímo do destination.
    * @private
-   * @param {AudioBuffer}   buffer
-   * @param {number}        volume
-   * @param {GainNode|null} gainNode
    */
-  _playOneShot(buffer, volume, gainNode) {
-    if (!buffer) return;
+  _playOneShot(buffer, volume) {
+    if (!buffer || !this._ctx) return;
 
-    const gainShot = this._ctx.createGain();
-    gainShot.gain.value = volume;
-    gainShot.connect(gainNode ? gainNode : this._ctx.destination);
+    const gainNode = this._ctx.createGain();
+    gainNode.gain.value = volume;
+    gainNode.connect(this._ctx.destination);
 
     const src  = this._ctx.createBufferSource();
     src.buffer = buffer;
     src.loop   = false;
-    src.connect(gainShot);
+    src.connect(gainNode);
     src.start(0);
-
-    // Automatický úklid po dohraní
-    src.onended = () => {
-      try { gainShot.disconnect(); } catch (_) {}
-    };
+    src.onended = () => { try { gainNode.disconnect(); } catch (_) {} };
   }
 
   /**
-   * Plynule nastaví gain hodnotu (zamezí klikání).
+   * Plynule nastaví gain hodnotu (zamezí klikání / praskání).
    * @private
-   * @param {GainNode} gainNode
-   * @param {number}   value
    */
   _setGain(gainNode, value) {
     if (!gainNode) return;
     const t = this._ctx.currentTime;
     gainNode.gain.cancelScheduledValues(t);
-    gainNode.gain.setTargetAtTime(value, t, 0.016);   // ~1 frame smoothing
+    gainNode.gain.setTargetAtTime(value, t, 0.016);
   }
 }

@@ -279,6 +279,12 @@ const AUDIO = Object.freeze({
   RPM_SHIFT_DOWN:    3200,
   /** Počet rychlostních stupňů */
   GEAR_COUNT:        6,
+  /**
+   * Hranice rychlostních stupňů v px/s (odvozeno z km/h přes PX_PER_S_TO_KMH).
+   * Stupeň 1: 0–225, 2: 225–450, 3: 450–675, 4: 675–975, 5: 975–1200, 6: 1200+
+   * km/h:      0–60,  60–120,    120–180,    180–260,    260–320
+   */
+  GEAR_THRESHOLDS:   Object.freeze([0, 225, 450, 675, 975, 1200]),
   /** Minimální playbackRate (při RPM = 0) */
   PITCH_MIN:         0.6,
   /** Maximální playbackRate (při RPM = RPM_MAX) */
@@ -299,4 +305,6 @@ const AUDIO = Object.freeze({
   MASTER_VOLUME:     0.8,
   /** Délka fade-out při zastavení enginu (s) */
   FADE_OUT_TIME:     0.4,
+  /** Minimální doba držení plynu (s) pro spuštění turbo one-shotu */
+  TURBO_THROTTLE_MIN: 1.0,
 });

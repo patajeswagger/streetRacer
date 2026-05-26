@@ -256,7 +256,11 @@ class Game {
   /** @private */
   _handleStartClick() {
     if (this._state === GameState.IDLE || this._state === GameState.GAME_OVER) {
-      this._audioEngine.start();
+      // start() je async (AudioContext.resume + decodeAudioData) —
+      // hru spustíme ihned, zvuk nastartuje souběžně
+      this._audioEngine.start().catch(err =>
+        console.warn('[Game] AudioEngine start failed:', err)
+      );
       this._startGame();
     }
   }
