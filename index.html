@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <title>Street Racer</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <div id="game-container">
+
+    <!-- Herní plocha -->
+    <svg id="game-canvas" xmlns="http://www.w3.org/2000/svg"></svg>
+
+    <!-- HUD overlay -->
+    <div id="hud" aria-live="polite">
+      <div id="hud-score">
+        <span class="hud-label">SKÓRE</span>
+        <span class="hud-value" id="hud-score-value">0</span>
+      </div>
+      <div id="hud-distance">
+        <span class="hud-label">VZDÁLENOST</span>
+        <span class="hud-value" id="hud-distance-value">0 m</span>
+      </div>
+      <div id="hud-speed">
+        <span class="hud-label">RYCHLOST</span>
+        <span class="hud-value" id="hud-speed-value">0 km/h</span>
+      </div>
+    </div>
+
+    <!-- Start / Game Over overlay -->
+    <div id="overlay" class="overlay">
+      <div class="overlay-panel">
+        <h1 id="overlay-title">STREET RACER</h1>
+        <div id="overlay-stats" class="overlay-stats hidden">
+          <p>Skóre: <strong id="result-score">0</strong></p>
+          <p>Vzdálenost: <strong id="result-distance">0 m</strong></p>
+          <p>Mince: <strong id="result-coins">0</strong></p>
+        </div>
+        <p id="overlay-subtitle">Vyhýbej se autům a sbírej mince!</p>
+        <button id="btn-start" class="btn-primary">HRÁT</button>
+        <button id="btn-close" class="btn-secondary hidden">ZPĚT NA ÚVOD</button>
+      </div>
+    </div>
+
+    <!-- Mobilní ovladač — D-pad layout: ▲▼ uprostřed, ◄► po stranách -->
+    <div id="controls">
+      <button id="btn-left"  class="control-btn" aria-label="Doleva">&#9664;</button>
+      <div id="controls-vertical">
+        <button id="btn-up"   class="control-btn" aria-label="Zrychlit">&#9650;</button>
+        <button id="btn-down" class="control-btn" aria-label="Brzdit">&#9660;</button>
+      </div>
+      <button id="btn-right" class="control-btn" aria-label="Doprava">&#9654;</button>
+    </div>
+
+  </div>
+
+  <!-- Moduly - pořadí záleží na závislostech -->
+  <script src="js/constants.js"></script>
+  <script src="js/road.js"></script>
+  <script src="js/particle.js"></script>
+  <script src="js/particleSystem.js"></script>
+  <script src="js/playerCar.js"></script>
+  <script src="js/trafficCar.js"></script>
+  <script src="js/trafficManager.js"></script>
+  <script src="js/policeCar.js"></script>
+  <script src="js/policeManager.js"></script>
+  <script src="js/coin.js"></script>
+  <script src="js/coinManager.js"></script>
+  <script src="js/collisionSystem.js"></script>
+  <script src="js/scoreSystem.js"></script>
+  <script src="js/hud.js"></script>
+  <script src="js/game.js"></script>
+
+</body>
+</html>

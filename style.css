@@ -1,0 +1,288 @@
+/* ============================================================
+   Reset & Base
+   ============================================================ */
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body {
+  width: 100%;
+  height: 100%;
+  background: #111;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  font-family: 'Segoe UI', Arial, sans-serif;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* ============================================================
+   Game Container  — portrait 9:16, max 400 px wide
+   ============================================================ */
+#game-container {
+  position: relative;
+  width: 400px;
+  max-width: 100vw;
+  /* Udržuje poměr 9:16 — na výšku telefonu */
+  aspect-ratio: 9 / 16;
+  max-height: 100svh;
+  overflow: hidden;
+}
+
+/* Přizpůsobení na malých obrazovkách — šířka se omezí podle výšky */
+@media (max-aspect-ratio: 9/16) {
+  #game-container {
+    width: 100vw;
+    max-width: none;
+  }
+}
+
+/* ============================================================
+   SVG Canvas
+   ============================================================ */
+#game-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: #2a2a2a;
+}
+
+/* ============================================================
+   HUD overlay
+   ============================================================ */
+#hud {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: linear-gradient(to bottom, rgba(0,0,0,0.65) 80%, transparent);
+  pointer-events: none;
+  z-index: 10;
+  gap: 4px;
+}
+
+#hud > div {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 0;
+}
+
+.hud-label {
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  color: #aaa;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.hud-value {
+  font-size: 15px;
+  font-weight: 700;
+  color: #fff;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+/* ============================================================
+   Overlay (start / game over)
+   ============================================================ */
+.overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.75);
+  z-index: 20;
+}
+
+.overlay.hidden {
+  display: none;
+}
+
+.overlay-panel {
+  background: #1a1a2e;
+  border: 2px solid #e94560;
+  border-radius: 12px;
+  padding: 32px 24px;
+  text-align: center;
+  width: 80%;
+  max-width: 300px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+#overlay-title {
+  font-size: 28px;
+  font-weight: 900;
+  color: #e94560;
+  letter-spacing: 0.12em;
+  text-shadow: 0 0 20px rgba(233, 69, 96, 0.6);
+}
+
+#overlay-subtitle {
+  font-size: 13px;
+  color: #ccc;
+  line-height: 1.6;
+}
+
+.busted-speed {
+  display: inline-block;
+  font-size: 22px;
+  font-weight: 900;
+  color: #1a8cff;
+  letter-spacing: 0.06em;
+  text-shadow: 0 0 12px rgba(26, 140, 255, 0.6);
+  margin-top: 4px;
+}
+
+.overlay-stats {
+  width: 100%;
+  background: rgba(255,255,255,0.05);
+  border-radius: 8px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.overlay-stats p {
+  font-size: 13px;
+  color: #aaa;
+}
+
+.overlay-stats strong {
+  color: #FFD700;
+  font-size: 15px;
+}
+
+.hidden {
+  display: none !important;
+}
+
+/* ============================================================
+   Buttons
+   ============================================================ */
+.btn-primary {
+  background: #e94560;
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  padding: 12px 36px;
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  cursor: pointer;
+  transition: background 0.15s, transform 0.1s;
+  margin-top: 4px;
+}
+
+.btn-primary:hover {
+  background: #c73652;
+}
+
+.btn-primary:active {
+  transform: scale(0.96);
+}
+
+.btn-secondary {
+  background: transparent;
+  color: #aaa;
+  border: 1px solid #444;
+  border-radius: 8px;
+  padding: 9px 28px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s, transform 0.1s;
+  margin-top: 6px;
+}
+
+.btn-secondary:hover {
+  color: #fff;
+  border-color: #888;
+}
+
+.btn-secondary:active {
+  transform: scale(0.96);
+}
+
+/* ============================================================
+   Mobile Controls — D-pad: ◄  [▲/▼]  ►
+   ============================================================ */
+#controls {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px 18px;
+  z-index: 15;
+  pointer-events: none; /* aktivuje se jen na touch zařízeních */
+}
+
+/* Na zařízeních bez hover (dotykové) zobrazíme tlačítka */
+@media (hover: none) {
+  #controls {
+    pointer-events: auto;
+  }
+}
+
+/* Sloupec pro ▲ a ▼ */
+#controls-vertical {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.control-btn {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  font-size: 22px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.1s;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: none;
+}
+
+.control-btn:active {
+  background: rgba(255, 255, 255, 0.28);
+}
+
+/* ▲ akcel — jemně zelený tón */
+#btn-up {
+  border-color: rgba(100, 220, 120, 0.4);
+}
+#btn-up:active {
+  background: rgba(100, 220, 120, 0.25);
+}
+
+/* ▼ brzda — jemně červený tón */
+#btn-down {
+  border-color: rgba(233, 69, 96, 0.4);
+}
+#btn-down:active {
+  background: rgba(233, 69, 96, 0.22);
+}

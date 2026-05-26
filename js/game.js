@@ -1,0 +1,499 @@
+'use strict';
+
+/**
+ * @file game.js
+ * Hlavní orchestrátor hry.
+ *
+ * Odpovědnosti:
+ *  - Inicializace SVG plátna a všech herních systémů.
+ *  - Herní smyčka (requestAnimationFrame) s delta-time.
+ *  - Řízení stavů: IDLE → RUNNING → GAME_OVER → RUNNING (restart).
+ *  - Integrace: road, playerCar, trafficManager, policeManager, coinManager,
+ *    collisionSystem, scoreSystem, hud.
+ *  - Ovládání rychlosti hráčem (↑ akcelerace, ↓ brzdění).
+ *  - Mobilní ovládání (touch tlačítka ◄ ► ▲ ▼).
+ *  - BUSTED stav při vjezdu do policejního radaru nad rychlostní limit.
+ */
+
+/** @enum {string} */
+const GameState = Object.freeze({
+  IDLE:      'idle',
+  RUNNING:   'running',
+  GAME_OVER: 'game_over',
+});
+
+// ─── InputManager ────────────────────────────────────────────────────────────
+
+/**
+ * Sleduje stav stisknutých kláves a virtuálních tlačítek.
+ * Poskytuje čistý boolean interface pro herní smyčku
+ * (místo event-driven přístupu, který by vyžadoval buffering).
+ */
+class InputManager {
+  constructor() {
+    /** @private — množina aktuálně stisknutých klíčů */
+    this._pressed = new Set();
+
+    /** @private — zda je vstup povolen */
+    this._enabled = false;
+
+    this._boundKeyDown = this._onKeyDown.bind(this);
+    this._boundKeyUp   = this._onKeyUp.bind(this);
+
+    document.addEventListener('keydown', this._boundKeyDown);
+    document.addEventListener('keyup',   this._boundKeyUp);
+  }
+
+  // ─── Privátní ──────────────────────────────────────────────────────────────
+
+  /** @private */
+  _onKeyDown(e) {
+    if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
+      e.preventDefault();
+    }
+    this._pressed.add(e.key);
+  }
+
+  /** @private */
+  _onKeyUp(e) {
+    this._pressed.delete(e.key);
+  }
+
+  // ─── Veřejné ───────────────────────────────────────────────────────────────
+
+  /** @param {boolean} enabled */
+  setEnabled(enabled) {
+    this._enabled = enabled;
+    if (!enabled) this._pressed.clear();
+  }
+
+  /**
+   * Simuluje stisknutí virtuální klávesy (mobilní tlačítka).
+   * @param {string} key
+   */
+  press(key) {
+    this._pressed.add(key);
+  }
+
+  /**
+   * Simuluje uvolnění virtuální klávesy (mobilní tlačítka).
+   * @param {string} key
+   */
+  release(key) {
+    this._pressed.delete(key);
+  }
+
+  /** @returns {boolean} */
+  isAccelerating() {
+    return this._enabled && this._pressed.has('ArrowUp');
+  }
+
+  /** @returns {boolean} */
+  isBraking() {
+    return this._enabled && this._pressed.has('ArrowDown');
+  }
+
+  /** @returns {boolean} */
+  isLeft() {
+    return this._enabled && this._pressed.has('ArrowLeft');
+  }
+
+  /** @returns {boolean} */
+  isRight() {
+    return this._enabled && this._pressed.has('ArrowRight');
+  }
+
+  /** Odstraní event listenery. */
+  destroy() {
+    document.removeEventListener('keydown', this._boundKeyDown);
+    document.removeEventListener('keyup',   this._boundKeyUp);
+  }
+}
+
+// ─── Game ─────────────────────────────────────────────────────────────────────
+
+class Game {
+  /**
+   * Vytvoří instanci hry a zahájí načítání assetů.
+   * Skutečná inicializace herních systémů proběhne v _init() po načtení spritu.
+   */
+  constructor() {
+    /** @private */
+    this._svg = document.getElementById('game-canvas');
+
+    /** @private */
+    this._state = GameState.IDLE;
+
+    /** @private — aktuální rychlost silnice (px/s) */
+    this._speed = PHYSICS.SPEED_INITIAL;
+
+    /** @private — handle pro requestAnimationFrame */
+    this._rafHandle = null;
+
+    /** @private — časová značka posledního framu */
+    this._lastTimestamp = null;
+
+    /**
+     * Akumulovaná doba nepřetržitého brzdění (s).
+     * Resetuje se při uvolnění tlačítka ↓.
+     * @private
+     */
+    this._brakeHeldTime = 0;
+
+    // ─── Načtení PNG spritu, pak inicializace systémů ─────────────────────────
+    this._initSvgViewBox();
+    this._loadSpriteAndInit();
+  }
+
+  /**
+   * Asynchronně načte PNG sprite hráčova auta, pak inicializuje herní systémy.
+   * Pokud načtení selže, pokračuje s null (SVG fallback).
+   * @private
+   */
+  _loadSpriteAndInit() {
+    const img = new Image();
+    img.onload  = () => this._init(img);
+    img.onerror = () => {
+      console.warn('[Game] Sprite player-car.png se nepodařilo načíst — použit SVG fallback.');
+      this._init(null);
+    };
+    img.src = 'assets/player-car.png';
+  }
+
+  /**
+   * Inicializuje všechny herní systémy. Volá se po načtení spritu.
+   * @private
+   * @param {HTMLImageElement|null} spriteImg
+   */
+  _init(spriteImg) {
+
+    this._inputManager   = new InputManager();
+    this._road           = new Road(this._svg);
+
+    // Skupina částic — nad silnicí, pod auty
+    this._particleGroup  = this._createParticleGroup();
+    this._particleSystem = new ParticleSystem(this._particleGroup);
+
+    this._playerCar      = new PlayerCar(this._svg, this._inputManager, spriteImg);
+    this._trafficManager = new TrafficManager(this._svg);
+    this._policeManager  = new PoliceManager(this._svg, this._trafficManager);
+    this._coinManager    = new CoinManager(this._svg, this._trafficManager);
+    this._scoreSystem    = new ScoreSystem();
+    this._hud            = new Hud();
+
+    // Hráčovo auto musí být vždy nad ostatními objekty
+    this._svg.appendChild(this._playerCar.svgGroup);
+
+    this._registerMobileControls();
+
+    // Zobrazení úvodní obrazovky
+    this._hud.showStart();
+    this._hud.onStartClick(() => this._handleStartClick());
+    this._hud.onCloseClick(() => this._handleCloseClick());
+  }
+
+  // ─── Inicializace ────────────────────────────────────────────────────────────
+
+  /**
+   * Nastaví viewBox SVG na herní rozměry.
+   * @private
+   */
+  _initSvgViewBox() {
+    this._svg.setAttribute('viewBox', `0 0 ${CANVAS.WIDTH} ${CANVAS.HEIGHT}`);
+    this._svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+  }
+
+  /**
+   * Vytvoří SVG skupinu pro částice a vloží ji do SVG na správnou vrstvu.
+   * Vrstva: nad silnicí (road), pod herními objekty.
+   * @private
+   * @returns {SVGGElement}
+   */
+  _createParticleGroup() {
+    const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    g.setAttribute('id', 'particles');
+    this._svg.appendChild(g);
+    return g;
+  }
+
+  /**
+   * Registruje touch/mouse eventy na mobilní tlačítka.
+   * Každé tlačítko mapuje na virtuální klávesu v InputManageru.
+   * @private
+   */
+  _registerMobileControls() {
+    const bindings = [
+      { id: 'btn-left',  key: 'ArrowLeft'  },
+      { id: 'btn-right', key: 'ArrowRight' },
+      { id: 'btn-up',    key: 'ArrowUp'    },
+      { id: 'btn-down',  key: 'ArrowDown'  },
+    ];
+
+    for (const { id, key } of bindings) {
+      const btn = document.getElementById(id);
+      if (!btn) continue;
+
+      const onPress   = (e) => { e.preventDefault(); this._inputManager.press(key);   };
+      const onRelease = (e) => { e.preventDefault(); this._inputManager.release(key); };
+
+      btn.addEventListener('touchstart', onPress,   { passive: false });
+      btn.addEventListener('touchend',   onRelease, { passive: false });
+      btn.addEventListener('touchcancel',onRelease, { passive: false });
+
+      // Fallback myš
+      btn.addEventListener('mousedown',  onPress);
+      btn.addEventListener('mouseup',    onRelease);
+      btn.addEventListener('mouseleave', onRelease);
+    }
+  }
+
+  // ─── Stavový stroj ───────────────────────────────────────────────────────────
+
+  /** @private */
+  _handleStartClick() {
+    if (this._state === GameState.IDLE || this._state === GameState.GAME_OVER) {
+      this._startGame();
+    }
+  }
+
+  /**
+   * Zavře game-over overlay a vrátí hráče na úvodní obrazovku.
+   * @private
+   */
+  _handleCloseClick() {
+    if (this._state !== GameState.GAME_OVER) return;
+    this._state = GameState.IDLE;
+    this._hud.showStart();
+  }
+
+  /**
+   * Spustí (nebo restartuje) hru.
+   * @private
+   */
+  _startGame() {
+    this._state         = GameState.RUNNING;
+    this._speed         = PHYSICS.SPEED_INITIAL;
+    this._lastTimestamp = null;
+
+    // Reset všech systémů
+    this._road.reset();
+    this._playerCar.reset();
+    this._trafficManager.reset();
+    this._policeManager.reset();
+    this._coinManager.reset();
+    this._scoreSystem.reset();
+    this._particleSystem.reset();
+    this._brakeHeldTime = 0;
+
+    this._inputManager.setEnabled(true);
+
+    this._hud.hideOverlay();
+    this._hud.update(0, 0, this._speed);
+
+    // Spustíme herní smyčku
+    this._rafHandle = requestAnimationFrame((ts) => this._gameLoop(ts));
+  }
+
+  /**
+   * Ukončí hru a zobrazí výsledky.
+   * @private
+   * @param {boolean} [busted=false] - true = chycen policií, false = náraz.
+   */
+  _endGame(busted = false) {
+    this._state = GameState.GAME_OVER;
+    this._inputManager.setEnabled(false);
+    this._playerCar.lockInput();
+    cancelAnimationFrame(this._rafHandle);
+
+    const bustedSpeedKmh = busted
+      ? Math.round(this._speed * PHYSICS.PX_PER_S_TO_KMH)
+      : 0;
+
+    this._hud.showGameOver(
+      this._scoreSystem.totalScore,
+      this._scoreSystem.distanceMeters,
+      this._scoreSystem.coinCount,
+      busted,
+      bustedSpeedKmh
+    );
+  }
+
+  // ─── Herní smyčka ────────────────────────────────────────────────────────────
+
+  /**
+   * Hlavní herní smyčka volaná přes requestAnimationFrame.
+   * @private
+   * @param {DOMHighResTimeStamp} timestamp
+   */
+  _gameLoop(timestamp) {
+    if (this._state !== GameState.RUNNING) return;
+
+    // Delta time — omezíme na max 100 ms (např. po přepnutí záložky)
+    const dt = Math.min((timestamp - (this._lastTimestamp ?? timestamp)) / 1000, 0.1);
+    this._lastTimestamp = timestamp;
+
+    this._update(dt);
+
+    this._rafHandle = requestAnimationFrame((ts) => this._gameLoop(ts));
+  }
+
+  /**
+   * Aktualizuje veškerou herní logiku pro jeden frame.
+   * @private
+   * @param {number} dt - Delta time v sekundách.
+   */
+  _update(dt) {
+    // 1. Rychlost — řízena hráčem
+    this._updateSpeed(dt);
+
+    // 2. Pohyb silnice + animace hráče
+    this._road.update(dt, this._speed);
+    this._playerCar.update(dt);
+
+    // 3. Skóre — vzdálenost
+    this._scoreSystem.addDistance(dt, this._speed);
+
+    // 4. Dopravní auta
+    this._trafficManager.update(dt, this._speed);
+
+    // 5. Policejní auta
+    this._policeManager.update(dt, this._speed);
+
+    // 6. Mince
+    this._coinManager.update(dt, this._speed);
+
+    // 7. Kolize — mince
+    const coinResult = CollisionSystem.checkPlayerVsCoins(
+      this._playerCar,
+      this._coinManager.getCoins()
+    );
+    if (coinResult.count > 0) {
+      this._scoreSystem.addCoins(coinResult.count);
+      for (const pos of coinResult.positions) {
+        this._particleSystem.spawnCoinBurst(pos.x, pos.y);
+      }
+    }
+
+    // 8. Kolize — náraz do dopravního auta (crash)
+    const crashTraffic = CollisionSystem.checkPlayerVsTraffic(
+      this._playerCar,
+      this._trafficManager.getCars()
+    );
+    if (crashTraffic !== null) {
+      this._endGame(false);
+      return;
+    }
+
+    // 9. Kolize — náraz do karoserie policejního auta (crash)
+    const crashPolice = CollisionSystem.checkPlayerVsTraffic(
+      this._playerCar,
+      this._policeManager.getCars()
+    );
+    if (crashPolice !== null) {
+      this._endGame(false);
+      return;
+    }
+
+    // 10. Kolize — radar policejního auta při vysoké rychlosti (busted)
+    const busted = CollisionSystem.checkPlayerVsPoliceRadar(
+      this._playerCar,
+      this._policeManager.getCars(),
+      this._speed
+    );
+    if (busted !== null) {
+      this._endGame(true);
+      return;
+    }
+
+    // 11. Částicové efekty — kouř z brzd
+    if (this._inputManager.isBraking()) {
+      this._spawnBrakeSmokeEffect(dt);
+    }
+
+    // 12. Částice — update
+    this._particleSystem.update(dt);
+
+    // 13. HUD refresh
+    this._hud.update(
+      this._scoreSystem.totalScore,
+      this._scoreSystem.distanceMeters,
+      this._speed
+    );
+  }
+
+  /**
+   * Spawnuje kouř z obou zadních kol hráčova auta.
+   * @private
+   * @param {number} dt
+   */
+  _spawnBrakeSmokeEffect(dt) {
+    const hitbox = this._playerCar.getHitbox();
+    const x = hitbox.x + hitbox.width  / 2;
+    const y = hitbox.y + hitbox.height;
+    this._particleSystem.spawnBrakeSmoke(x, y, dt);
+  }
+
+  /**
+   * Aktualizuje rychlost silnice na základě vstupu hráče.
+   *
+   * Brzdění — tři fáze:
+   *  1. t < BRAKE_RAMPUP_START       → konstantní DECELERATION
+   *  2. t ∈ [START, START+DURATION]  → kvadraticky roste od DECELERATION
+   *                                     na DECELERATION_MAX
+   *  3. t > START+DURATION           → konstantní DECELERATION_MAX
+   *
+   * Kvadratický průběh: f(t) = base + (max - base) × ((t - start) / duration)²
+   *
+   * @private
+   * @param {number} dt - Delta time (s).
+   */
+  _updateSpeed(dt) {
+    if (this._inputManager.isAccelerating()) {
+      this._brakeHeldTime = 0;
+      this._speed += PHYSICS.ACCELERATION * dt;
+
+    } else if (this._inputManager.isBraking()) {
+      this._brakeHeldTime += dt;
+
+      const decel = this._calcBrakeDeceleration(this._brakeHeldTime);
+      this._speed -= decel * dt;
+
+    } else {
+      // Uvolnění brzdy — reset akumulátoru
+      this._brakeHeldTime = 0;
+      this._speed -= PHYSICS.DRAG * dt;
+    }
+
+    this._speed = Math.max(PHYSICS.SPEED_MIN, Math.min(this._speed, PHYSICS.SPEED_MAX));
+  }
+
+  /**
+   * Vypočítá aktuální brzdný účinek (px/s²) na základě doby držení brzdy.
+   *
+   * @private
+   * @param {number} heldTime - Jak dlouho je brzda držena (s).
+   * @returns {number} Brzdná síla v px/s².
+   */
+  _calcBrakeDeceleration(heldTime) {
+    const { DECELERATION, DECELERATION_MAX, BRAKE_RAMPUP_START, BRAKE_RAMPUP_DURATION } = PHYSICS;
+
+    if (heldTime <= BRAKE_RAMPUP_START) {
+      return DECELERATION;
+    }
+
+    // Normalizovaný čas v rampup fázi [0, 1]
+    const t = Math.min(
+      (heldTime - BRAKE_RAMPUP_START) / BRAKE_RAMPUP_DURATION,
+      1
+    );
+
+    // Kvadratický nárůst: pomalý start, rychlý konec
+    return DECELERATION + (DECELERATION_MAX - DECELERATION) * (t * t);
+  }
+}
+
+// ─── Spuštění ────────────────────────────────────────────────────────────────
+
+document.addEventListener('DOMContentLoaded', () => {
+  new Game();
+});

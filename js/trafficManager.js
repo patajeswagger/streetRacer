@@ -1,0 +1,185 @@
+'use strict';
+
+/**
+ * @file trafficManager.js
+ * Řídí spawn a životní cyklus dopravních vozidel.
+ *
+ * Spawn logika:
+ *  - Interval spawnu se zkracuje s rostoucí rychlostí silnice.
+ *  - Nové vozidlo se negeneruje do pruhu, kde je jiné vozidlo blízko horního okraje.
+ *  - Typ vozidla je vybrán ze VEHICLE_SPAWN_POOL (váhovaný výběr).
+ */
+
+class TrafficManager {
+  /**
+   * @param {SVGElement} svg - Kořenový SVG element.
+   */
+  constructor(svg) {
+    /** @private */
+    this._svg = svg;
+
+    /**
+     * Aktivní vozidla na scéně.
+     * @type {TrafficCar[]}
+     */
+    this._cars = [];
+
+    /** @private — zbývající čas do dalšího spawnu (s) */
+    this._spawnTimer = 0;
+  }
+
+  // ─── Privátní metody ────────────────────────────────────────────────────────
+
+  /**
+   * Vypočítá aktuální interval spawnu v sekundách na základě rychlosti.
+   * @private
+   * @param {number} speed - Aktuální rychlost silnice (px/s).
+   * @returns {number}
+   */
+  _calcSpawnInterval(speed) {
+    const speedDelta = (speed - PHYSICS.SPEED_INITIAL) / 100;
+    const interval   = SPAWN.INTERVAL_BASE - speedDelta * SPAWN.INTERVAL_STEP;
+    return Math.max(SPAWN.INTERVAL_MIN, interval);
+  }
+
+  /**
+   * Vybere náhodný typ vozidla ze spawn pool (váhovaný výběr).
+   * @private
+   * @returns {string} VehicleType
+   */
+  _pickVehicleType() {
+    return VEHICLE_SPAWN_POOL[Math.floor(Math.random() * VEHICLE_SPAWN_POOL.length)];
+  }
+
+  /**
+   * Vrátí seznam pruhů, které jsou volné pro spawn nového vozidla.
+   * Pruh je obsazený, pokud v něm existuje vozidlo, jehož horní okraj
+   * je stále v bezpečné zóně od horního okraje plátna.
+   * @private
+   * @param {number} vehicleHeight - Výška nového vozidla.
+   * @returns {number[]} Pole indexů volných pruhů.
+   */
+  _getAvailableLanes(vehicleHeight) {
+    const safeZone = vehicleHeight + SPAWN.SAFE_GAP;
+
+    // Pro každý pruh zjistíme, zda není obsazený
+    const occupiedLanes = new Set(
+      this._cars
+        .filter(car => car.cy - car.height / 2 < safeZone)
+        .map(car => car.laneIndex)
+    );
+
+    return Array.from(
+      { length: ROAD.LANE_COUNT },
+      (_, i) => i
+    ).filter(i => !occupiedLanes.has(i));
+  }
+
+  /**
+   * Spawn nového vozidla, pokud jsou dostupné pruhy.
+   * @private
+   * @param {number} roadSpeed - Aktuální rychlost silnice.
+   */
+  _spawnVehicle(roadSpeed) {
+    const type      = this._pickVehicleType();
+    const def       = VEHICLE_DEFS[type];
+    const available = this._getAvailableLanes(def.height);
+
+    if (available.length === 0) return;
+
+    const laneIndex = available[Math.floor(Math.random() * available.length)];
+    // Začínáme těsně nad horním okrajem plátna
+    const startY = -(def.height / 2) - 5;
+
+    const car = new TrafficCar(this._svg, type, laneIndex, startY, roadSpeed);
+    this._cars.push(car);
+  }
+
+  // ─── Veřejné metody ─────────────────────────────────────────────────────────
+
+  /**
+   * Aktualizuje spawn timer, pohybuje vozidly a odstraňuje neaktivní.
+   * Volá se každý frame z herní smyčky.
+   *
+   * @param {number} dt        - Delta time (s).
+   * @param {number} roadSpeed - Aktuální rychlost silnice (px/s).
+   */
+  update(dt, roadSpeed) {
+    // Pohyb existujících vozidel
+    for (const car of this._cars) {
+      car.update(dt, roadSpeed);
+    }
+
+    // Přizpůsobení rychlosti — prevence prolínání vozidel ve stejném pruhu
+    this._applyFollowLogic();
+
+    // Odstranění neaktivních
+    const inactive = this._cars.filter(c => !c.active);
+    for (const car of inactive) car.remove();
+    this._cars = this._cars.filter(c => c.active);
+
+    // Spawn logika
+    this._spawnTimer -= dt;
+    if (this._spawnTimer <= 0) {
+      const interval = this._calcSpawnInterval(roadSpeed);
+      this._spawnTimer = interval;
+      this._spawnVehicle(roadSpeed);
+    }
+  }
+
+  /**
+   * Pro každý pruh seřadí vozidla dle Y (vzestupně = nejdál nahoře první)
+   * a zkontroluje sousední páry. Pokud zadní auto dojelo přední na vzdálenost
+   * menší než (výška předního × FOLLOW_GAP_FACTOR), přizpůsobí svou rychlost.
+   *
+   * Souřadnicový systém: větší Y = níže na obrazovce = blíže hráči.
+   * „Přední" auto (leader) má MENŠÍ Y (je výše na obrazovce, tedy před zadním).
+   * „Zadní" auto (follower) má VĚTŠÍ Y.
+   *
+   * Mezera = spodní okraj leadera − horní okraj followera.
+   * Spodní okraj leadera = leader.cy + leader.height/2.
+   * Horní okraj followera = follower.cy − follower.height/2.
+   * Mezera záporná znamená průnik → okamžité přizpůsobení.
+   *
+   * @private
+   */
+  _applyFollowLogic() {
+    for (let lane = 0; lane < ROAD.LANE_COUNT; lane++) {
+      // Auta v tomto pruhu, seřazená dle Y vzestupně (přední = malé Y)
+      const inLane = this._cars
+        .filter(c => c.laneIndex === lane)
+        .sort((a, b) => a.cy - b.cy);
+
+      for (let i = 0; i < inLane.length - 1; i++) {
+        const leader   = inLane[i];
+        const follower = inLane[i + 1];
+
+        const leaderBottom   = leader.cy   + leader.height   / 2;
+        const followerTop    = follower.cy - follower.height / 2;
+        const gap            = followerTop - leaderBottom;
+        const triggerDist    = leader.height * SPAWN.FOLLOW_GAP_FACTOR;
+
+        if (gap < triggerDist && follower.speed > leader.speed) {
+          follower.matchSpeed(leader.speed);
+        }
+      }
+    }
+  }
+
+  /**
+   * Vrátí všechna aktivní vozidla (pro kolizní detekci).
+   * @returns {TrafficCar[]}
+   */
+  getCars() {
+    return this._cars;
+  }
+
+  /**
+   * Resetuje správce — odstraní všechna vozidla ze scény.
+   */
+  reset() {
+    for (const car of this._cars) car.remove();
+    this._cars = [];
+    this._spawnTimer = SPAWN.INTERVAL_BASE;
+  }
+}
