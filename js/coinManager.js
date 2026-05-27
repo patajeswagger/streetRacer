@@ -75,17 +75,39 @@ class CoinManager {
   }
 
   /**
-   * Spawnuje novou minci do náhodného volného pruhu.
+   * Vrátí počet mincí, které se mají spawnout najednou (dle rychlosti v km/h).
+   * > 200 km/h → 3×, > 100 km/h → 2×, jinak 1×
    * @private
+   * @param {number} speed - Rychlost silnice (px/s).
+   * @returns {number}
    */
-  _spawnCoin() {
+  _coinCount(speed) {
+    const kmh = speed * PHYSICS.PX_PER_S_TO_KMH;
+    if (kmh > 200) return 3;
+    if (kmh > 100) return 2;
+    return 1;
+  }
+
+  /**
+   * Spawnuje nové mince do náhodných volných pruhů.
+   * Počet závisí na aktuální rychlosti.
+   * @private
+   * @param {number} speed - Aktuální rychlost silnice (px/s).
+   */
+  _spawnCoin(speed) {
     const available = this._getAvailableLanes();
     if (available.length === 0) return;
 
-    const laneIndex = available[Math.floor(Math.random() * available.length)];
-    const startY    = -(COIN.RADIUS) - 5;
-    const coin      = new Coin(this._svg, laneIndex, startY);
-    this._coins.push(coin);
+    const count = Math.min(this._coinCount(speed), available.length);
+
+    // Zamícháme dostupné pruhy a vybereme prvních `count`
+    const shuffled = available.slice().sort(() => Math.random() - 0.5);
+    for (let i = 0; i < count; i++) {
+      const laneIndex = shuffled[i];
+      const startY    = -(COIN.RADIUS) - 5;
+      const coin      = new Coin(this._svg, laneIndex, startY);
+      this._coins.push(coin);
+    }
   }
 
   // ─── Veřejné metody ─────────────────────────────────────────────────────────
@@ -107,7 +129,7 @@ class CoinManager {
     this._spawnTimer -= dt;
     if (this._spawnTimer <= 0) {
       this._spawnTimer = this._calcSpawnInterval(roadSpeed);
-      this._spawnCoin();
+      this._spawnCoin(roadSpeed);
     }
   }
 
