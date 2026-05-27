@@ -89,8 +89,9 @@ class CoinManager {
   }
 
   /**
-   * Spawnuje nové mince do náhodných volných pruhů.
+   * Spawnuje řadu mincí za sebou ve stejném pruhu.
    * Počet závisí na aktuální rychlosti.
+   * Mince jsou rozloženy za sebou (v ose Y) se stejným rozestupem.
    * @private
    * @param {number} speed - Aktuální rychlost silnice (px/s).
    */
@@ -98,14 +99,15 @@ class CoinManager {
     const available = this._getAvailableLanes();
     if (available.length === 0) return;
 
-    const count = Math.min(this._coinCount(speed), available.length);
+    const laneIndex = available[Math.floor(Math.random() * available.length)];
+    const count     = this._coinCount(speed);
 
-    // Zamícháme dostupné pruhy a vybereme prvních `count`
-    const shuffled = available.slice().sort(() => Math.random() - 0.5);
+    // Rozestup mezi mincemi v řadě (průměr mince + mezera)
+    const spacing = COIN.RADIUS * 2 + 18;
+
     for (let i = 0; i < count; i++) {
-      const laneIndex = shuffled[i];
-      const startY    = -(COIN.RADIUS) - 5;
-      const coin      = new Coin(this._svg, laneIndex, startY);
+      const startY = -(COIN.RADIUS) - 5 - i * spacing;
+      const coin   = new Coin(this._svg, laneIndex, startY);
       this._coins.push(coin);
     }
   }
