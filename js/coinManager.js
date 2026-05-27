@@ -48,10 +48,10 @@ class CoinManager {
    * @returns {number}
    */
   _calcSpawnInterval(speed) {
-    // Mince každé 3–5 sekund, zkracuje se s rychlostí
-    const base = 4.0;
+    // Mince každé 0.75–1.25 sekundy, zkracuje se s rychlostí
+    const base = 1.0;
     const speedDelta = (speed - PHYSICS.SPEED_INITIAL) / 100;
-    return Math.max(2.0, base - speedDelta * 0.15);
+    return Math.max(0.5, base - speedDelta * 0.04);
   }
 
   /**
@@ -83,9 +83,9 @@ class CoinManager {
    */
   _coinCount(speed) {
     const kmh = speed * PHYSICS.PX_PER_S_TO_KMH;
-    if (kmh > 200) return 3;
-    if (kmh > 100) return 2;
-    return 1;
+    if (kmh > 200) return 12;
+    if (kmh > 100) return 8;
+    return 4;
   }
 
   /**
