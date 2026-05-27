@@ -157,12 +157,13 @@ class AudioEngine {
     this._sources.turbo.connect(this._gains.turbo);
     this._sources.turbo.start(0);
 
-    // Fade-in master gainu
+    // Fade-in master gainu (respektuje stav mute)
     const master = this._gains.master;
     const t      = this._ctx.currentTime;
+    const targetVol = this._muted ? 0 : AUDIO.MASTER_VOLUME;
     master.gain.cancelScheduledValues(t);
     master.gain.setValueAtTime(0, t);
-    master.gain.linearRampToValueAtTime(AUDIO.MASTER_VOLUME, t + 0.3);
+    master.gain.linearRampToValueAtTime(targetVol, t + 0.3);
 
     // Reset herního stavu
     this._gear                 = 0;
@@ -210,6 +211,22 @@ class AudioEngine {
       ctx.suspend();
       console.log('[AudioEngine] Engine zastaven.');
     }, AUDIO.FADE_OUT_TIME * 1000 + 50);
+  }
+
+  /**
+   * Ztlumí nebo odztlumí engine.
+   * Funguje i když engine právě nehraje (uloží stav pro příští start()).
+   * @param {boolean} muted
+   */
+  setMuted(muted) {
+    this._muted = muted;
+    if (this._gains && this._gains.master) {
+      const t = this._ctx.currentTime;
+      const target = muted ? 0 : AUDIO.MASTER_VOLUME;
+      this._gains.master.gain.cancelScheduledValues(t);
+      this._gains.master.gain.setValueAtTime(this._gains.master.gain.value, t);
+      this._gains.master.gain.linearRampToValueAtTime(target, t + 0.08);
+    }
   }
 
   // ─── Herní smyčka ────────────────────────────────────────────────────────────

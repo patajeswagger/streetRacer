@@ -190,6 +190,17 @@ class Game {
     this._audioEngine = new AudioEngine();
     this._audioEngine.load();
 
+    // Výchozí stav: zvuk vypnutý
+    this._muted = true;
+    this._audioEngine.setMuted(true);
+
+    // Tlačítko mute
+    this._btnMute = document.getElementById('btn-mute');
+    if (this._btnMute) {
+      this._btnMute.addEventListener('click', () => this._toggleMute());
+      this._btnMute.addEventListener('touchstart', (e) => { e.preventDefault(); this._toggleMute(); }, { passive: false });
+    }
+
     // Zobrazení úvodní obrazovky
     this._hud.showStart();
     this._hud.onStartClick(() => this._handleStartClick());
@@ -273,6 +284,19 @@ class Game {
     if (this._state !== GameState.GAME_OVER) return;
     this._state = GameState.IDLE;
     this._hud.showStart();
+  }
+
+  /**
+   * Přepne stav ztlumení zvuku.
+   * @private
+   */
+  _toggleMute() {
+    this._muted = !this._muted;
+    this._audioEngine.setMuted(this._muted);
+    if (this._btnMute) {
+      this._btnMute.classList.toggle('muted', this._muted);
+      this._btnMute.setAttribute('aria-label', this._muted ? 'Zapnout zvuk' : 'Vypnout zvuk');
+    }
   }
 
   /**

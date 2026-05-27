@@ -62,6 +62,7 @@ html, body {
   width: 100%;
   display: flex;
   justify-content: space-between;
+  align-items: flex-start;
   padding: 8px 12px;
   background: linear-gradient(to bottom, rgba(0,0,0,0.65) 80%, transparent);
   pointer-events: none;
@@ -286,3 +287,45 @@ html, body {
 #btn-down:active {
   background: rgba(233, 69, 96, 0.22);
 }
+
+/* ============================================================
+   Mute button (HUD)
+   ============================================================ */
+.btn-mute {
+  pointer-events: auto;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1.5px solid rgba(255, 255, 255, 0.25);
+  border-radius: 50%;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+  transition: background 0.15s, border-color 0.15s, transform 0.1s;
+  flex-shrink: 0;
+  align-self: center;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+  font-size: 16px;
+  line-height: 1;
+}
+
+.btn-mute:hover {
+  background: rgba(255, 255, 255, 0.15);
+  border-color: rgba(255, 255, 255, 0.5);
+}
+
+.btn-mute:active {
+  transform: scale(0.92);
+}
+
+/* Ikony — zobrazujeme jen tu správnou */
+.mute-icon { pointer-events: none; }
+
+/* Výchozí stav: muted → zobrazit přeškrtnutý reproduktor */
+.btn-mute.muted    .mute-off { display: inline; }
+.btn-mute.muted    .mute-on  { display: none;   }
+.btn-mute:not(.muted) .mute-off { display: none;   }
+.btn-mute:not(.muted) .mute-on  { display: inline; }
