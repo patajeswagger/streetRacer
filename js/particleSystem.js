@@ -38,7 +38,7 @@ class ParticleSystem {
   }
 
   /** Maximální počet živých částic najednou. */
-  static get MAX_PARTICLES() { return 200; }
+  static get MAX_PARTICLES() { return 120; }
 
   // ─── Privátní ────────────────────────────────────────────────────────────────
 
@@ -161,99 +161,6 @@ class ParticleSystem {
         opacity:    0.7,
         opacityEnd: 0,
         shape:      ParticleShape.RING,
-      });
-    }
-  }
-
-  /**
-   * Výbuch rakety — kombinace ohnivého kruhu, jisker a kouřového mraku.
-   * @param {number} x - X střed výbuchu.
-   * @param {number} y - Y střed výbuchu.
-   */
-  spawnExplosion(x, y) {
-    // A) Bílý záblesk (flash ring)
-    this._addParticle({
-      x, y, vx: 0, vy: 0,
-      lifetime:   0.18,
-      radius:     8,
-      radiusEnd:  55,
-      color:      '#ffffff',
-      opacity:    0.9,
-      opacityEnd: 0,
-      shape:      ParticleShape.RING,
-    });
-
-    // B) Ohnivý kruh
-    for (let i = 0; i < 2; i++) {
-      this._addParticle({
-        x, y, vx: 0, vy: 0,
-        lifetime:   0.35 - i * 0.08,
-        radius:     12 + i * 6,
-        radiusEnd:  48 + i * 10,
-        color:      i === 0 ? '#ff6600' : '#ff3300',
-        opacity:    0.85,
-        opacityEnd: 0,
-        shape:      ParticleShape.RING,
-      });
-    }
-
-    // C) Zlaté a oranžové jiskry — hvězdicový vzor
-    const SPARK_COUNT = 16;
-    for (let i = 0; i < SPARK_COUNT; i++) {
-      const angle  = (i / SPARK_COUNT) * Math.PI * 2;
-      const speed  = this._rand(120, 260);
-      const jitter = this._rand(-0.3, 0.3);
-      const colors = ['#FFD700', '#ff8c00', '#ff4500', '#fff176'];
-      this._addParticle({
-        x, y,
-        vx:         Math.cos(angle + jitter) * speed,
-        vy:         Math.sin(angle + jitter) * speed,
-        lifetime:   this._rand(0.4, 0.7),
-        radius:     this._rand(3, 6),
-        radiusEnd:  0,
-        color:      colors[Math.floor(Math.random() * colors.length)],
-        opacity:    1,
-        opacityEnd: 0,
-        shape:      ParticleShape.CIRCLE,
-      });
-    }
-
-    // D) Extra velké úlomky
-    const DEBRIS_COUNT = 8;
-    for (let i = 0; i < DEBRIS_COUNT; i++) {
-      const angle = this._rand(0, Math.PI * 2);
-      const speed = this._rand(60, 140);
-      this._addParticle({
-        x, y,
-        vx:         Math.cos(angle) * speed,
-        vy:         Math.sin(angle) * speed,
-        lifetime:   this._rand(0.5, 0.9),
-        radius:     this._rand(5, 10),
-        radiusEnd:  0,
-        color:      this._rand(0, 1) > 0.5 ? '#ff6600' : '#cc2200',
-        opacity:    1,
-        opacityEnd: 0,
-        shape:      ParticleShape.CIRCLE,
-      });
-    }
-
-    // E) Kouřový mrak (šedé kruhy)
-    const SMOKE_COUNT = 10;
-    for (let i = 0; i < SMOKE_COUNT; i++) {
-      const angle = this._rand(0, Math.PI * 2);
-      const speed = this._rand(20, 70);
-      this._addParticle({
-        x: x + this._rand(-10, 10),
-        y: y + this._rand(-10, 10),
-        vx:         Math.cos(angle) * speed,
-        vy:         Math.sin(angle) * speed - 30,
-        lifetime:   this._rand(0.6, 1.1),
-        radius:     this._rand(8, 16),
-        radiusEnd:  this._rand(22, 35),
-        color:      this._rand(0, 1) > 0.5 ? '#888888' : '#555555',
-        opacity:    this._rand(0.5, 0.75),
-        opacityEnd: 0,
-        shape:      ParticleShape.CIRCLE,
       });
     }
   }

@@ -339,10 +339,3 @@ const AUDIO = Object.freeze({
   /** Délka fade-out při zastavení enginu (s) */
   FADE_OUT_TIME:      0.4,
 });
-
-// ─── Raketomet ───────────────────────────────────────────────────────────────
-
-const ROCKET = Object.freeze({
-  /** Cooldown mezi výstřely (s) */
-  COOLDOWN: 5,
-});
