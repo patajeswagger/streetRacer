@@ -344,5 +344,5 @@ const AUDIO = Object.freeze({
 
 const ROCKET = Object.freeze({
   /** Cooldown mezi výstřely (s) */
-  COOLDOWN: 5,
+  COOLDOWN: 1,
 });
