@@ -48,7 +48,7 @@ class CoinManager {
    * @returns {number}
    */
   _calcSpawnInterval(speed) {
-    // Mince každé 0.75–1.25 sekundy, zkracuje se s rychlostí
+    // Mince každé ~0.5–1.0 sekundy, zkracuje se s rychlostí
     const base = 1.0;
     const speedDelta = (speed - PHYSICS.SPEED_INITIAL) / 100;
     return Math.max(0.5, base - speedDelta * 0.04);
@@ -81,17 +81,21 @@ class CoinManager {
    * @param {number} speed - Rychlost silnice (px/s).
    * @returns {number}
    */
-  _coinCount(speed) {
+  /**
+   * Vrátí počet mincí v řadě za sebou dle rychlosti.
+   * 0–100 km/h → 1, 100–200 → 2, 200+ → 3
+   * @private
+   */
+  _coinsPerLane(speed) {
     const kmh = speed * PHYSICS.PX_PER_S_TO_KMH;
-    if (kmh > 200) return 12;
-    if (kmh > 100) return 8;
-    return 4;
+    if (kmh > 200) return 3;
+    if (kmh > 100) return 2;
+    return 1;
   }
 
   /**
-   * Spawnuje řadu mincí za sebou ve stejném pruhu.
-   * Počet závisí na aktuální rychlosti.
-   * Mince jsou rozloženy za sebou (v ose Y) se stejným rozestupem.
+   * Spawnuje řadu mincí za sebou v náhodném volném pruhu.
+   * Počet mincí v řadě závisí na rychlosti (1/2/3).
    * @private
    * @param {number} speed - Aktuální rychlost silnice (px/s).
    */
@@ -99,16 +103,13 @@ class CoinManager {
     const available = this._getAvailableLanes();
     if (available.length === 0) return;
 
-    const laneIndex = available[Math.floor(Math.random() * available.length)];
-    const count     = this._coinCount(speed);
+    const laneIndex    = available[Math.floor(Math.random() * available.length)];
+    const coinsInRow   = this._coinsPerLane(speed);
+    const spacing      = COIN.RADIUS * 2 + 18;
 
-    // Rozestup mezi mincemi v řadě (průměr mince + mezera)
-    const spacing = COIN.RADIUS * 2 + 18;
-
-    for (let i = 0; i < count; i++) {
+    for (let i = 0; i < coinsInRow; i++) {
       const startY = -(COIN.RADIUS) - 5 - i * spacing;
-      const coin   = new Coin(this._svg, laneIndex, startY);
-      this._coins.push(coin);
+      this._coins.push(new Coin(this._svg, laneIndex, startY));
     }
   }
 
