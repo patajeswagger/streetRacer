@@ -556,5 +556,3 @@ class Game {
 document.addEventListener('DOMContentLoaded', () => {
   new Game();
 });
-
-//ahoj
