@@ -180,9 +180,13 @@ class Game {
     this._coinManager    = new CoinManager(this._svg, this._trafficManager);
     this._scoreSystem    = new ScoreSystem();
     this._hud            = new Hud();
+    this._rocketManager  = null; // inicializace po hráči níže
 
     // Hráčovo auto musí být vždy nad ostatními objekty
     this._svg.appendChild(this._playerCar.svgGroup);
+
+    // Raketomet — inicializace po hráči (potřebuje referenci)
+    this._rocketManager = new RocketManager(this._svg, this._playerCar, this._inputManager);
 
     this._registerMobileControls();
 
@@ -317,6 +321,7 @@ class Game {
     this._scoreSystem.reset();
     this._particleSystem.reset();
     this._brakeHeldTime = 0;
+    this._rocketManager.reset();
 
     this._inputManager.setEnabled(true);
 
@@ -396,6 +401,15 @@ class Game {
     // 6. Mince
     this._coinManager.update(dt, this._speed);
 
+    // 6b. Rakety
+    this._rocketManager.update(
+      dt,
+      this._trafficManager.getCars(),
+      this._policeManager.getCars(),
+      this._particleSystem,
+      this._scoreSystem
+    );
+
     // 7. Kolize — mince
     const coinResult = CollisionSystem.checkPlayerVsCoins(
       this._playerCar,
@@ -451,7 +465,9 @@ class Game {
     this._hud.update(
       this._scoreSystem.totalScore,
       this._scoreSystem.distanceMeters,
-      this._speed
+      this._speed,
+      this._rocketManager.cooldown,
+      this._rocketManager.maxCooldown
     );
 
     // 14. Zvukový engine

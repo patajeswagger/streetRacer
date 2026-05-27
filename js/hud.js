@@ -24,6 +24,10 @@ class Hud {
     this._elResultScore    = document.getElementById('result-score');
     this._elResultDistance = document.getElementById('result-distance');
     this._elResultCoins    = document.getElementById('result-coins');
+
+    // Raketomet HUD
+    this._elRocket  = document.getElementById('hud-rocket');
+    this._rocketBar = document.getElementById('hud-rocket-bar');
   }
 
   // ─── HUD ─────────────────────────────────────────────────────────────────────
@@ -34,10 +38,29 @@ class Hud {
    * @param {number} distanceMeters - Vzdálenost v metrech.
    * @param {number} speedPxPerS  - Rychlost silnice v px/s.
    */
-  update(score, distanceMeters, speedPxPerS) {
+  update(score, distanceMeters, speedPxPerS, rocketCooldown = 0, rocketMax = 5) {
     this._elScore.textContent    = score;
     this._elDistance.textContent = `${distanceMeters} m`;
     this._elSpeed.textContent    = `${Math.round(speedPxPerS * PHYSICS.PX_PER_S_TO_KMH)} km/h`;
+
+    // Cooldown raketometu
+    if (this._elRocket) {
+      const ready = rocketCooldown <= 0;
+      if (ready) {
+        this._elRocket.textContent = '🚀 PŘIPRAVEN';
+        this._elRocket.style.color  = '#00e676';
+        this._elRocket.style.opacity = '1';
+        this._rocketBar.style.width  = '100%';
+        this._rocketBar.style.background = '#00e676';
+      } else {
+        const pct = Math.round((1 - rocketCooldown / rocketMax) * 100);
+        this._elRocket.textContent = `🚀 ${rocketCooldown.toFixed(1)}s`;
+        this._elRocket.style.color  = '#ff9800';
+        this._elRocket.style.opacity = '0.9';
+        this._rocketBar.style.width  = `${pct}%`;
+        this._rocketBar.style.background = '#ff9800';
+      }
+    }
   }
 
   // ─── Overlay ─────────────────────────────────────────────────────────────────
